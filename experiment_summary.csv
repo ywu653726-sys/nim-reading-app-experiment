@@ -1,0 +1,2 @@
+﻿run_id,participant_code,platform,article_id,title,language,length_group,is_chunked,retry_count,status,response_time_sec,summary_score,keywords_score,hard_sentence_score
+1,S01,Android,1,範例中文短文,zh,short,0,0,success,2.345,,,
