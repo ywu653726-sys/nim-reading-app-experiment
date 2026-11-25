@@ -12,16 +12,21 @@ BASE_URL = "https://integrate.api.nvidia.com/v1"
 SYSTEM_PROMPT = """你是一位專業的閱讀理解與句法分析助手。
 請針對使用者提供的文章內容，嚴格以「純 JSON 格式」輸出，不要加上 markdown 程式碼區塊（不要 ```json），也不要輸出多餘的開頭或結語。
 
+語言與數量硬性規定：
+1. 除 complex_sentences 裡的 "original" 必須保留原文句字（中英文皆可）外，其餘所有文字欄位（"summary"、"keywords" 陣列元素、"structure"、"plain_explanation"）一律使用「繁體中文」，禁止使用簡體字。
+2. "keywords" 請提供 5 到 8 個精準代表文章核心主題的詞彙。
+3. "complex_sentences" 請挑出 2 到 3 句結構最複雜的原句，並完整填寫 "original"、"structure" 與 "plain_explanation"。
+
 請嚴格遵守以下 JSON 結構：
 {
   "status": "success",
-  "summary": "語意連貫、精簡的核心重點摘要（非單純擷取原句）",
-  "keywords": ["關鍵詞1", "關鍵詞2", "關鍵詞3"],
+  "summary": "語意連貫、精簡的核心重點摘要（繁體中文，非單純擷取原句）",
+  "keywords": ["關鍵詞1", "關鍵詞2", "關鍵詞3", "關鍵詞4", "關鍵詞5"],
   "complex_sentences": [
     {
-      "original": "文章中結構最複雜的原句（挑出 2～3 句）",
-      "structure": "主句/子句/修飾語結構拆解",
-      "plain_explanation": "白話說明"
+      "original": "文章中結構最複雜的原句（2～3 句）",
+      "structure": "主句/子句/修飾語結構拆解（繁體中文）",
+      "plain_explanation": "白話說明（繁體中文）"
     }
   ]
 }
@@ -55,13 +60,17 @@ def _normalize_result(parsed: dict[str, Any], raw_text: str) -> dict[str, Any]:
     normalized_sentences: list[dict[str, str]] = []
     for item in complex_sentences:
         if isinstance(item, dict):
-            normalized_sentences.append(
-                {
-                    "original": str(item.get("original", "")).strip(),
-                    "structure": str(item.get("structure", "")).strip(),
-                    "plain_explanation": str(item.get("plain_explanation", "")).strip(),
-                }
-            )
+            orig = str(item.get("original", "")).strip()
+            struct = str(item.get("structure", "")).strip()
+            plain = str(item.get("plain_explanation", "")).strip()
+            if orig or struct or plain:
+                normalized_sentences.append(
+                    {
+                        "original": orig,
+                        "structure": struct,
+                        "plain_explanation": plain,
+                    }
+                )
 
     return {
         "status": "success",
@@ -82,7 +91,6 @@ def _parse_json_object(raw_content: str) -> dict[str, Any] | None:
         text = text.replace("```json", "").replace("```JSON", "").replace("```", "").strip()
 
     decoder = json.JSONDecoder()
-    # 從後往前找最後一個可能的 JSON 起始大括號，避免抓到前面的思考草稿
     brace_positions = [i for i, ch in enumerate(text) if ch == "{"]
     for pos in reversed(brace_positions):
         try:
@@ -119,7 +127,7 @@ def analyze_text(text: str) -> dict[str, Any]:
     )
 
     last_error = ""
-    for _ in range(2):
+    for _ in range(3):
         try:
             response = client.chat.completions.create(
                 model=MODEL_NAME,
@@ -140,7 +148,14 @@ def analyze_text(text: str) -> dict[str, Any]:
         parsed = _parse_json_object(content_text) or _parse_json_object(reasoning_text)
         if isinstance(parsed, dict):
             chosen_raw = content_text if _parse_json_object(content_text) else reasoning_text
-            return _normalize_result(parsed, chosen_raw)
+            normalized = _normalize_result(parsed, chosen_raw)
+            has_content = bool(normalized["summary"]) and (
+                bool(normalized["keywords"]) or bool(normalized["complex_sentences"])
+            )
+            if has_content:
+                return normalized
+            last_error = f"模型回傳內容不完整（摘要或解析欄位為空） | 原始輸出：{chosen_raw[:300]}"
+            continue
 
         preview = (content_text or reasoning_text)[:300]
         last_error = f"JSON 解析失敗：無法擷取完整 JSON 物件 | 原始輸出：{preview}"
